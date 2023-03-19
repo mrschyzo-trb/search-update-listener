@@ -1,5 +1,7 @@
+mod configuration;
 mod data;
 
+use crate::configuration::{ElasticsearchSettings, RabbitMQSettings, Settings};
 use crate::data::inbound::InstrumentChangeMessage;
 use crate::data::outbound::InstrumentUniverseChangeSet;
 use anyhow::{Context, Error, Result};
@@ -9,7 +11,9 @@ use elasticsearch::http::Url;
 use elasticsearch::{BulkOperation, BulkParts, Elasticsearch};
 use futures_lite::stream::StreamExt;
 use lapin::message::Delivery;
-use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties, Consumer};
+use lapin::tcp::OwnedTLSConfig;
+use lapin::uri::{AMQPAuthority, AMQPScheme, AMQPUri, AMQPUserInfo};
+use lapin::{options::*, types::FieldTable, Connect, ConnectionProperties, Consumer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -18,18 +22,25 @@ use tokio_executor_trait::Tokio;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    let batch_size = 1000;
-    let idle_time = Duration::from_millis(10000u64);
-    let mut consumer = build_rabbitmq_consumer()
+    let settings = Settings::new()?;
+    let batch_size = settings.application.batch;
+    let idle_time = Duration::from_millis(settings.application.idle);
+    println!(
+        "Starting consumer - batch size {}; idle time {}ms",
+        batch_size,
+        idle_time.as_millis()
+    );
+    let mut consumer = build_rabbitmq_consumer(&settings.rabbit)
         .await
         .with_context(|| "Unable to build rabbitmq consumer")?;
 
-    let client =
-        build_elasticsearch_client().with_context(|| "Unable to build elasticsearch client")?;
+    let client = build_elasticsearch_client(&settings.elasticsearch)
+        .with_context(|| "Unable to build elasticsearch client")?;
 
     let mut deliveries: HashMap<String, Delivery> = HashMap::with_capacity(batch_size);
     let mut bulk_updates: HashMap<String, Value> = HashMap::with_capacity(batch_size);
 
+    println!("Starting consuming messages");
     loop {
         let attempted_next = timeout(idle_time, consumer.next()).await;
         match attempted_next {
@@ -49,6 +60,8 @@ async fn main() -> Result<()> {
                 }
             }
         };
+
+        let update_count = bulk_updates.len();
         let bulk_requests: Vec<BulkOperation<Value>> = bulk_updates
             .drain()
             .map(|(isin, value)| {
@@ -66,13 +79,14 @@ async fn main() -> Result<()> {
             .await
         {
             Ok(response) => response,
-            Err(_) => {
+            Err(error) => {
+                eprintln!("{}", error);
                 ack_all(&mut deliveries).await;
                 continue;
             }
         };
-        if let Ok(json) = response.json::<Map<String, Value>>().await {
-            println!("{:?}", json);
+        if (response.json::<Map<String, Value>>().await).is_ok() {
+            println!("Updated {} instrument(s)", update_count);
         };
         ack_all(&mut deliveries).await;
     }
@@ -138,16 +152,40 @@ fn into_change_set(delivery: &Delivery) -> Result<InstrumentUniverseChangeSet> {
     Ok(change.data.into())
 }
 
-async fn build_rabbitmq_consumer() -> Result<Consumer> {
-    let addr = "amqp://127.0.0.1:5672/%2f";
-    let tokio = Tokio::current();
-    let conn =
-        Connection::connect(addr, ConnectionProperties::default().with_executor(tokio)).await?;
-    let channel = conn.create_channel().await?;
+async fn build_rabbitmq_consumer(settings: &RabbitMQSettings) -> Result<Consumer> {
+    println!(
+        "Connecting to vhost '{}' at amqp://{}:****@{}:{} from queue '{}'",
+        settings.vhost, settings.user, settings.host, settings.port, settings.queue
+    );
+    let channel = AMQPUri {
+        scheme: AMQPScheme::AMQP,
+        authority: AMQPAuthority {
+            userinfo: AMQPUserInfo {
+                username: settings.user.clone(),
+                password: settings.password.clone(),
+            },
+            host: settings.host.clone(),
+            port: settings.port,
+        },
+        vhost: settings.vhost.clone(),
+        query: lapin::uri::AMQPQueryString::default(),
+    }
+    .connect(
+        ConnectionProperties::default().with_executor(Tokio::current()),
+        OwnedTLSConfig::default(),
+    )
+    .await?
+    .create_channel()
+    .await?;
+
+    channel
+        .basic_qos(settings.prefetch, BasicQosOptions::default())
+        .await?;
+
     let consumer = channel
         .basic_consume(
-            "instrumentsearch.platform",
-            "rusterino",
+            &settings.queue,
+            &settings.tag,
             BasicConsumeOptions::default(),
             FieldTable::default(),
         )
@@ -155,15 +193,18 @@ async fn build_rabbitmq_consumer() -> Result<Consumer> {
     Ok(consumer)
 }
 
-fn build_elasticsearch_client() -> Result<Elasticsearch> {
-    let url = Url::parse("http://localhost:9200")?;
+fn build_elasticsearch_client(settings: &ElasticsearchSettings) -> Result<Elasticsearch> {
+    println!(
+        "Connecting to elasticsearch with user '{}' at {}",
+        settings.user, settings.url
+    );
+    let url = Url::parse(&settings.url)?;
     let conn_pool = SingleNodeConnectionPool::new(url);
     let transport = TransportBuilder::new(conn_pool)
         .auth(Credentials::Basic(
-            "elastic".to_owned(),
-            "123test".to_owned(),
+            settings.user.clone(),
+            settings.password.clone(),
         ))
-        .disable_proxy()
         .build()?;
 
     Ok(Elasticsearch::new(transport))
