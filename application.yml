@@ -1,0 +1,17 @@
+rabbit:
+  host: "localhost"
+  user: "guest"
+  password: "guest" # overridable with APP_RABBIT_PASSWORD
+  port: 5672
+  vhost: "/"
+  address: "amqp://127.0.0.1:5672/%2f"
+  prefetch: 1000
+  queue: "instrumentsearch.platform"
+  tag: "rust-consumer"
+elasticsearch:
+  url: "http://localhost:9200"
+  user: "elastic"
+  password: "test123" # overridable with APP_ELASTICSEARCH_PASSWORD
+application:
+  idle: 1000
+  batch: 1000
