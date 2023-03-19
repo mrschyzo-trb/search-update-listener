@@ -1,0 +1,64 @@
+{
+  "id":"624c2854-7f3c-40f0-bd48-75af8f219c9f",
+  "type":"INSTRUMENT",
+  "sourceHost":"",
+  "sourceSystem":"Platform",
+  "data":{
+    "isin":"DE000EXCL111",
+    "instrument_type":"STOCK",
+    "name_official":"SOMETHINGELSE",
+    "wkn":"EXCL",
+    "name_short":"EXCL",
+    "name_short_localized":{
+      "de":"EXCL",
+      "en":"EXCL",
+      "fr":"EXCL",
+      "es":"EXCL",
+      "it":"EXCL"
+    },
+    "intl_symbol":"BAS",
+    "issuer":"BASF",
+    "underlying_isin":null,
+    "underlying_name":null,
+    "product_category":null,
+    "exchange_ids":[
+      "LSX"
+    ],
+    "first_seen":"2019-01-14T08:50:27.175026",
+    "jurisdictions":[
+      {
+        "jurisdiction":"DE",
+        "kid_required":false,
+        "kid_link":"null",
+        "savable": true
+      },
+      {
+        "jurisdiction":"AT",
+        "kid_required":false,
+        "kid_link":"null",
+        "savable": false
+      },
+      {
+        "jurisdiction":"FR",
+        "kid_required":false,
+        "kid_link":"null",
+        "savable": true
+      }
+    ],
+    "sectors":[
+      "chemicals"
+    ],
+    "regions":[
+
+    ],
+    "attributes":[
+
+    ],
+    "countries":[
+      "DE"
+    ],
+    "indices":[
+      "dax"
+    ]
+  }
+}
