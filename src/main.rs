@@ -179,12 +179,14 @@ fn into_change_set(delivery: &Delivery) -> Result<InstrumentUniverseChangeSet> {
 }
 
 async fn build_rabbitmq_consumer(settings: &RabbitMQSettings) -> Result<Consumer> {
+    let consumer_tag = format!("{}-{}", settings.tag, uuid::Uuid::new_v4());
     tracing::info!(
         vhost = settings.vhost,
         user = settings.user,
         host = settings.host,
         port = settings.port,
         queue = settings.queue,
+        consumer_tag = consumer_tag,
         "Booting up RMQ consumer"
     );
     let channel = AMQPUri {
@@ -215,7 +217,7 @@ async fn build_rabbitmq_consumer(settings: &RabbitMQSettings) -> Result<Consumer
     let consumer = channel
         .basic_consume(
             &settings.queue,
-            &settings.tag,
+            &consumer_tag,
             BasicConsumeOptions::default(),
             FieldTable::default(),
         )
