@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
                 }
             }
             Ok(Some(Err(failed_delivery))) => {
-                tracing::error!("Failed delivery from RMQ {:?}", failed_delivery);
+                tracing::error!(error = ?failed_delivery, "Failed delivery from RMQ {:?}", failed_delivery);
                 continue;
             }
             Ok(Some(Ok(delivery))) => {
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
             }
         };
 
-        let update_count = bulk_updates.len();
+        let isins_to_upsert = bulk_updates.keys().cloned().collect::<Vec<_>>();
         let bulk_requests: Vec<BulkOperation<Value>> = bulk_updates
             .drain()
             .map(|(isin, value)| {
@@ -91,13 +91,13 @@ async fn main() -> Result<()> {
         {
             Ok(response) => response,
             Err(error) => {
-                tracing::error!(error = format!("{:?}", error), "Failed upsert");
+                tracing::error!(error = ?error, "Failed upsert");
                 ack_all(&mut deliveries).await;
                 continue;
             }
         };
         if (response.json::<Map<String, Value>>().await).is_ok() {
-            tracing::info!(update_count = update_count, "Success upsert");
+            tracing::info!(updated_isins = ?isins_to_upsert, "Success upsert");
         };
         ack_all(&mut deliveries).await;
     }
@@ -134,7 +134,7 @@ async fn handle_delivery(
 ) {
     let change_set = match into_change_set(&delivery) {
         Err(error) => {
-            tracing::error!(error = format!("{:?}", error), "Message -> changeset: fail");
+            tracing::error!(error = ?error, "Message -> changeset: fail");
             delivery.reject(BasicRejectOptions::default()).await.ok();
             return;
         }
@@ -142,7 +142,7 @@ async fn handle_delivery(
     };
     let value = match into_value(&change_set) {
         Err(error) => {
-            tracing::error!(error = format!("{:?}", error), "Changeset -> json: fail");
+            tracing::error!(error = ?error, "Changeset -> json: fail");
             delivery.reject(BasicRejectOptions::default()).await.ok();
             return;
         }
@@ -256,7 +256,7 @@ fn build_probe() -> Result<()> {
                 stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").ok();
             }
             Err(e) => {
-                tracing::warn!(error = format!("{:?}", e), "Unable to accept connection")
+                tracing::warn!(error = ?e, "Unable to accept connection")
             }
         }
     }
