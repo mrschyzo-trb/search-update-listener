@@ -13,11 +13,10 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release
 
-# We do not need the Rust toolchain to run the binary!
 FROM debian:buster AS runtime
 WORKDIR app
 RUN apt-get update -y && \
-    apt-get install libssl1.1 && \
+    apt-get install -y libssl1.1 ca-certificates && \
     dpkg -L libssl1.1 && \
     apt update -y
 COPY --from=builder /app/application.yml /app/application.yml
