@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: instrument-search
-          image: mrschyzo/instrument-search-listener:0.0.0
+          image: mrschyzo/instrument-search-listener:latest
           imagePullPolicy: IfNotPresent
           command:
             - "/usr/local/bin/app"

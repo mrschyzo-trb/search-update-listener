@@ -17,22 +17,28 @@ use lapin::{options::*, types::FieldTable, Connect, ConnectionProperties, Consum
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::time::Duration;
 use std::net::TcpListener;
 use std::thread;
+use std::time::Duration;
 use tokio::time::timeout;
 use tokio_executor_trait::Tokio;
+use tracing::Level;
+use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    setup_global_tracing_subscriber()?;
+
     let settings = Settings::new()?;
     let batch_size = settings.application.batch;
     let idle_time = Duration::from_millis(settings.application.idle);
-    println!(
-        "Starting consumer - batch size {}; idle time {}ms",
-        batch_size,
-        idle_time.as_millis()
+
+    tracing::info!(
+        batch_size = batch_size,
+        idle_time = idle_time.as_millis(),
+        "Booting up listener"
     );
+
     let mut consumer = build_rabbitmq_consumer(&settings.rabbit)
         .await
         .with_context(|| "Unable to build rabbitmq consumer")?;
@@ -45,7 +51,7 @@ async fn main() -> Result<()> {
 
     let _ = thread::spawn(build_probe);
 
-    println!("Starting consuming messages");
+    tracing::info!("Start RMQ consumption");
     loop {
         let attempted_next = timeout(idle_time, consumer.next()).await;
         match attempted_next {
@@ -55,7 +61,7 @@ async fn main() -> Result<()> {
                 }
             }
             Ok(Some(Err(failed_delivery))) => {
-                eprintln!("Failed delivery from RMQ {}", failed_delivery);
+                tracing::error!("Failed delivery from RMQ {:?}", failed_delivery);
                 continue;
             }
             Ok(Some(Ok(delivery))) => {
@@ -85,16 +91,31 @@ async fn main() -> Result<()> {
         {
             Ok(response) => response,
             Err(error) => {
-                eprintln!("{}", error);
+                tracing::error!(error = format!("{:?}", error), "Failed upsert");
                 ack_all(&mut deliveries).await;
                 continue;
             }
         };
         if (response.json::<Map<String, Value>>().await).is_ok() {
-            println!("Updated {} instrument(s)", update_count);
+            tracing::info!(update_count = update_count, "Success upsert");
         };
         ack_all(&mut deliveries).await;
     }
+}
+
+fn setup_global_tracing_subscriber() -> Result<()> {
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_file(true)
+        .with_line_number(true)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .json()
+        .finish();
+
+    tracing::subscriber::set_global_default(subscriber)
+        .with_context(|| "Unable to create tracing subscriber".to_owned())
 }
 
 async fn ack_all(deliveries: &mut HashMap<String, Delivery>) {
@@ -113,7 +134,7 @@ async fn handle_delivery(
 ) {
     let change_set = match into_change_set(&delivery) {
         Err(error) => {
-            eprintln!("Unable to turn message into changeset: {}", error);
+            tracing::error!(error = format!("{:?}", error), "Message -> changeset: fail");
             delivery.reject(BasicRejectOptions::default()).await.ok();
             return;
         }
@@ -121,7 +142,7 @@ async fn handle_delivery(
     };
     let value = match into_value(&change_set) {
         Err(error) => {
-            eprintln!("Unable to turn message into changeset: {}", error);
+            tracing::error!(error = format!("{:?}", error), "Changeset -> json: fail");
             delivery.reject(BasicRejectOptions::default()).await.ok();
             return;
         }
@@ -158,9 +179,13 @@ fn into_change_set(delivery: &Delivery) -> Result<InstrumentUniverseChangeSet> {
 }
 
 async fn build_rabbitmq_consumer(settings: &RabbitMQSettings) -> Result<Consumer> {
-    println!(
-        "Connecting to vhost '{}' at amqp://{}:****@{}:{} from queue '{}'",
-        settings.vhost, settings.user, settings.host, settings.port, settings.queue
+    tracing::info!(
+        vhost = settings.vhost,
+        user = settings.user,
+        host = settings.host,
+        port = settings.port,
+        queue = settings.queue,
+        "Booting up RMQ consumer"
     );
     let channel = AMQPUri {
         scheme: AMQPScheme::AMQP,
@@ -199,10 +224,12 @@ async fn build_rabbitmq_consumer(settings: &RabbitMQSettings) -> Result<Consumer
 }
 
 fn build_elasticsearch_client(settings: &ElasticsearchSettings) -> Result<Elasticsearch> {
-    println!(
-        "Connecting to elasticsearch with user '{}' at {}",
-        settings.user, settings.url
+    tracing::info!(
+        user = settings.user,
+        url = settings.url,
+        "Listener connecting to elasticsearch"
     );
+
     let url = Url::parse(&settings.url)?;
     let conn_pool = SingleNodeConnectionPool::new(url);
     let transport = TransportBuilder::new(conn_pool)
@@ -215,21 +242,21 @@ fn build_elasticsearch_client(settings: &ElasticsearchSettings) -> Result<Elasti
     Ok(Elasticsearch::new(transport))
 }
 
-
 fn build_probe() -> Result<()> {
-    let listener = TcpListener::bind("0.0.0.0:8081")?;
+    let addr = "0.0.0.0:8081";
+    let listener = TcpListener::bind(addr)?;
 
-    println!("Probes installed in port 8081");
+    tracing::info!(addr = addr, "Readiness and liveness probes online");
 
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                let mut buf = [0;256];
+                let mut buf = [0; 256];
                 stream.read(&mut buf).ok();
                 stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").ok();
             }
             Err(e) => {
-                eprintln!("Unable to accept connection {:?}", e)
+                tracing::warn!(error = format!("{:?}", e), "Unable to accept connection")
             }
         }
     }
