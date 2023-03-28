@@ -16,7 +16,10 @@ use lapin::uri::{AMQPAuthority, AMQPScheme, AMQPUri, AMQPUserInfo};
 use lapin::{options::*, types::FieldTable, Connect, ConnectionProperties, Consumer};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::time::Duration;
+use std::net::TcpListener;
+use std::thread;
 use tokio::time::timeout;
 use tokio_executor_trait::Tokio;
 
@@ -39,6 +42,8 @@ async fn main() -> Result<()> {
 
     let mut deliveries: HashMap<String, Delivery> = HashMap::with_capacity(batch_size);
     let mut bulk_updates: HashMap<String, Value> = HashMap::with_capacity(batch_size);
+
+    let _ = thread::spawn(build_probe);
 
     println!("Starting consuming messages");
     loop {
@@ -208,4 +213,25 @@ fn build_elasticsearch_client(settings: &ElasticsearchSettings) -> Result<Elasti
         .build()?;
 
     Ok(Elasticsearch::new(transport))
+}
+
+
+fn build_probe() -> Result<()> {
+    let listener = TcpListener::bind("0.0.0.0:8081")?;
+
+    println!("Probes installed in port 8081");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                let mut buf = [0;256];
+                stream.read(&mut buf).ok();
+                stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n").ok();
+            }
+            Err(e) => {
+                eprintln!("Unable to accept connection {:?}", e)
+            }
+        }
+    }
+    Ok(())
 }
