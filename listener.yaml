@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: instrument-search-listener-rust
+  namespace: default
+  labels:
+    app.kubernetes.io/name: instrument-search-listener-rust
+    argocd.argoproj.io/instance: instrument-search
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: instrument-search-listener-rust
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: instrument-search-listener-rust
+    spec:
+      containers:
+        - name: instrument-search
+          image: mrschyzo/instrument-search-listener:0.0.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - "/usr/local/bin/app"
+          ports:
+            - containerPort: 8081
+              name: management
+          env:
+            - name: APP_RABBIT_HOST
+              value: rabbitmq.rabbitmq.svc
+            - name: APP_RABBIT_USER
+              value: instrument_search
+            - name: APP_RABBIT_PORT
+              value: "5672"
+            - name: APP_RABBIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: instrument-search
+                  key: SPRING_RABBITMQ_PASSWORD
+            - name: APP_ELASTICSEARCH_URL
+              value: https://vpc-instruments-3nxsm6cgac4nqzgrvdqutcrzxa.eu-central-1.es.amazonaws.com:443
+            - name: APP_ELASTICSEARCH_USER
+              value: admin
+            - name: APP_ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: instrument-search
+                  key: INSTRUMENTSEARCH_ELASTIC_PASSWORD
+            - name: DD_AGENT_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          resources:
+            limits:
+              memory: 2Gi
+            requests:
+              cpu: 600m
+              memory: 1200Mi
+          readinessProbe:
+            successThreshold: 1
+            failureThreshold: 5
+            periodSeconds: 15
+            initialDelaySeconds: 20
+            httpGet:
+              path: /
+              port: 8081
+              scheme: HTTP
+          livenessProbe:
+            successThreshold: 1
+            failureThreshold: 5
+            periodSeconds: 15
+            initialDelaySeconds: 20
+            timeoutSeconds: 3
+            httpGet:
+              path: /
+              port: 8081
+              scheme: HTTP
+---
+apiVersion: autoscaling/v2beta2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: instrument-search-listener-rust
+  namespace: default
+  labels:
+    argocd.argoproj.io/instance: instrument-search
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: instrument-search-listener-rust
+  minReplicas: 1
+  maxReplicas: 1
+  behavior:
+    scaleUp:
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: AverageValue
+          averageValue: 750m
+    - type: External
+      external:
+        metric:
+          name: datadogmetric@default:instrument-search-messages-universe
+        target:
+          averageValue: '1000'
+          type: AverageValue
